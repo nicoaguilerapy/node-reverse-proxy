@@ -4,7 +4,8 @@
   "description": "Servidor para enmascarar la ip publica",
   "main": "proxy.app",
   "scripts": {
-    "test": ""
+    "start": "node proxy.js", 
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Nicolás Aguilera",
   "license": "ISC",
