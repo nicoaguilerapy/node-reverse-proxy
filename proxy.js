@@ -6,7 +6,7 @@ const proxy = httpProxy.createProxyServer({});
 const server = http.createServer((req, res) => {
 
   proxy.web(req, res, {
-    target: '', //ip
+    target: process.env.URL , //ip
   });
 });
 
