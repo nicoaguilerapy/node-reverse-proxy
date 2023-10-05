@@ -1,0 +1,14 @@
+{
+  "name": "reverse-proxy",
+  "version": "1.0.0",
+  "description": "Servidor para enmascarar la ip publica",
+  "main": "proxy.app",
+  "scripts": {
+    "test": ""
+  },
+  "author": "Nicolás Aguilera",
+  "license": "ISC",
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}
