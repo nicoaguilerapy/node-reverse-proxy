@@ -20,5 +20,5 @@ proxy.on('error', (err, req, res) => {
 
 const port = process.env.PORT || 3001;
 server.listen(port, () => {
-  console.log(`Proxy listen: ${port}`);
+  console.log(`Proxy IP: ${process.env.URL }`);
 });
