@@ -4,12 +4,14 @@
   "description": "Servidor para enmascarar la ip publica",
   "main": "proxy.app",
   "scripts": {
-    "start": "node proxy.js", 
+    "start": "node proxy.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Nicolás Aguilera",
   "license": "ISC",
   "dependencies": {
-    "http-proxy": "^1.18.1"
+    "express": "^4.18.2",
+    "http-proxy": "^1.18.1",
+    "http-proxy-middleware": "^2.0.6"
   }
 }
