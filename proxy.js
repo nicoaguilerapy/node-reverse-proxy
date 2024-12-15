@@ -10,6 +10,8 @@ const { PROXY_TARGET, PORT, AUTHORIZATION_TOKEN } = require('./app/config');
 const proxy = httpProxy.createProxyServer({
   secure: true,
   changeOrigin: true,
+  selfHandleResponse: false,
+  preserveHeaderKeyCase: true,
 });
 
 // Variable global para habilitar o deshabilitar el guardado de registros
