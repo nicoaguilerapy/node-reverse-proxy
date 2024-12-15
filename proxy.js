@@ -10,8 +10,6 @@ const { PROXY_TARGET, PORT, AUTHORIZATION_TOKEN } = require('./app/config');
 const proxy = httpProxy.createProxyServer({
   secure: true,
   changeOrigin: true,
-  selfHandleResponse: false,
-  preserveHeaderKeyCase: true,
 });
 
 // Variable global para habilitar o deshabilitar el guardado de registros
@@ -76,64 +74,38 @@ const server = http.createServer((req, res) => {
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ message: `El registro de log pasa a estado: ${isLoggingActive ? 'activo' : 'desacivado'}` }));
+      res.end(JSON.stringify({ message: `Logging is now ${isLoggingActive ? 'active' : 'inactive'}` }));
       return;
     }
 
     const targetUrl = mapProxyUrl(req);
 
     // Variables para capturar el cuerpo de la respuesta
-    let responseBody = '';
+    let responseChunks = [];
     const originalWrite = res.write;
     const originalEnd = res.end;
 
     // Interceptar datos de la respuesta
     res.write = function (chunk, encoding, callback) {
-      if (res.getHeader('content-encoding') === 'gzip') {
-        zlib.gunzip(chunk, (err, decoded) => {
-          if (!err) {
-            responseBody += sanitizeString(decoded.toString());
-          }
-        });
-      } else {
-        responseBody += sanitizeString(chunk.toString());
-      }
+      responseChunks.push(chunk); // Acumula los datos
       return originalWrite.call(res, chunk, encoding, callback);
     };
 
     res.end = function (chunk, encoding, callback) {
       if (chunk) {
-        if (res.getHeader('content-encoding') === 'gzip') {
-          zlib.gunzip(chunk, (err, decoded) => {
-            if (!err) {
-              responseBody += sanitizeString(decoded.toString());
-            }
-          });
-        } else {
-          responseBody += sanitizeString(chunk.toString());
-        }
+        responseChunks.push(chunk); // Agrega el último chunk si existe
       }
 
-      // Guardar el log solo si está activo
-      if (isLoggingActive) {
-        const logData = {
-          url: req.url,
-          method: req.method,
-          request_status: res.statusCode,
-          request: {
-            headers: req.headers,
-            body: req.body || {},
-          },
-          response_status: res.statusCode,
-          response: {
-            headers: res.getHeaders ? res.getHeaders() : {},
-            body: responseBody,
-          },
-        };
-
-        LogModel.createLog(logData).catch((err) => {
-          console.error('Error al guardar el log:', err);
+      // Procesar y descomprimir respuesta
+      const buffer = Buffer.concat(responseChunks);
+      if (res.getHeader('content-encoding') === 'gzip') {
+        zlib.gunzip(buffer, (err, decoded) => {
+          responseBody = err ? '' : sanitizeString(decoded.toString());
+          saveLog(req, res, responseBody); // Guardar log después de procesar
         });
+      } else {
+        responseBody = sanitizeString(buffer.toString());
+        saveLog(req, res, responseBody); // Guardar log directamente
       }
 
       return originalEnd.call(res, chunk, encoding, callback);
@@ -144,33 +116,54 @@ const server = http.createServer((req, res) => {
   });
 });
 
-// Capturar errores en el proxy
-proxy.on('error', async (err, req, res) => {
-  console.error('Error en el proxy:', err.message, {
-    code: err.code,
-    errno: err.errno,
-    syscall: err.syscall,
-  });
-
-  // Registrar el error en la base de datos si el guardado está activo
+function saveLog(req, res, responseBody) {
+  // Guardar el log solo si está activo
   if (isLoggingActive) {
-    await LogModel.createLog({
+    const logData = {
       url: req.url,
       method: req.method,
-      request_status: 500,
+      request_status: res.statusCode,
       request: {
         headers: req.headers,
         body: req.body || {},
       },
-      response_status: null,
-      response: { error: err.message },
+      response_status: res.statusCode,
+      response: {
+        headers: res.getHeaders ? res.getHeaders() : {},
+        body: responseBody,
+      },
+    };
+
+    LogModel.createLog(logData).catch((err) => {
+      console.error('Error al guardar el log:', err);
     });
   }
+}
 
-  res.writeHead(500, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ message: 'Error en el proxy'}));
+// Capturar errores en el proxy
+proxy.on('error', async (err, req, res) => {
+  console.error('Error en el proxy:', err);
+
+  // Registrar el error en la base de datos solo si el guardado está activo
+  const logData = {
+    url: req.url,
+    method: req.method,
+    request_status: 500,
+    request: {
+      headers: req.headers,
+      body: req.body || {},
+    },
+    response_status: null,
+    response: null,
+  };
+
+  if (isLoggingActive) {
+    await LogModel.createLog(logData);
+  }
+
+  res.writeHead(500, { 'Content-Type': 'text/plain' });
+  res.end('Error interno del proxy');
 });
-;
 
 // Iniciar el servidor
 server.listen(PORT, () => {
