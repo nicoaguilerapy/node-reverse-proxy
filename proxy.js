@@ -4,71 +4,80 @@ const httpProxy = require('http-proxy');
 const LogModel = require('./log/LogModel'); // Ruta al modelo
 const { PROXY_TARGET, PORT } = require('./app/config');
 
-const proxy = httpProxy.createProxyServer({});
+const proxy = httpProxy.createProxyServer({
+  secure: true,
+  changeOrigin: true,
+});
 
 // Función para ajustar dinámicamente la URL
 function mapProxyUrl(req) {
   const apiPrefix = '/api/';
   if (req.url.startsWith(apiPrefix)) {
-    // Asegurarnos de que PROXY_TARGET termine sin "/" y req.url comience con "/"
     const baseUrl = PROXY_TARGET.endsWith('/') ? PROXY_TARGET.slice(0, -1) : PROXY_TARGET;
     const relativeUrl = req.url.startsWith('/') ? req.url : `/${req.url}`;
-    const newUrl = `${baseUrl}${relativeUrl}`; // Concatenar las partes
-
+    const newUrl = `${baseUrl}${relativeUrl}`;
     console.log(`Redirigiendo a: ${newUrl}`);
     return newUrl;
   }
-
   console.log(`Redirigiendo a: ${PROXY_TARGET}`);
   return PROXY_TARGET;
 }
 
+// Función para limpiar caracteres no válidos de la cadena
+function sanitizeString(inputString) {
+  if (!inputString) return '';
+  // Elimina cualquier caracter no imprimible o nulo (caracteres inválidos)
+  return inputString.replace(/[\u0000-\u001F\u007F-\u009F]/g, '').replace(/�/g, '') // Elimina el caracter '�'
+  .replace(/\",/g, '"'); 
+}
 
 // Manejador principal del servidor HTTP
-const server = http.createServer(async (req, res) => {
-  let targetUrl = '';
-  try {
-    targetUrl = mapProxyUrl(req);
+const server = http.createServer((req, res) => {
+  const targetUrl = mapProxyUrl(req);
 
-    // Proxy al destino mapeado
-    proxy.web(req, res, {
-      target: targetUrl,
-    });
+  // Variables para capturar el cuerpo de la respuesta
+  let responseBody = '';
+  const originalWrite = res.write;
+  const originalEnd = res.end;
 
-    // Log la solicitud en la base de datos (sin esperar el resultado)
-    LogModel.createLog({
+  // Interceptar datos de la respuesta
+  res.write = function (chunk, encoding, callback) {
+    responseBody += sanitizeString(chunk.toString());
+    return originalWrite.call(res, chunk, encoding, callback);
+  };
+
+  res.end = function (chunk, encoding, callback) {
+    if (chunk) {
+      responseBody += sanitizeString(chunk.toString());
+    }
+
+    // Log después de completar la respuesta
+    const logData = {
       url: req.url,
       method: req.method,
-      request_status: 200,
+      request_status: res.statusCode,
       request: {
         headers: req.headers,
         body: req.body || {},
       },
-      response_status: 200,
+      response_status: res.statusCode,
       response: {
-        headers: res.getHeaders(),
+        headers: res.getHeaders ? res.getHeaders() : {},
+        body: responseBody,
       },
-    });
-  } catch (error) {
-    console.error('Error durante el mapeo de la URL', error);
+    };
 
-    // Registrar el error en la base de datos
-    await LogModel.createLog({
-      url: req.url,
-      method: req.method,
-      request_status: 500,
-      request: {
-        headers: req.headers,
-        body: req.body || {},
-      },
-      response_status: null,
-      response: null,
+    LogModel.createLog(logData).catch(err => {
+      console.error('Error al guardar el log:', err);
     });
 
-    // Respuesta estándar de error al usuario
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Error interno en el proxy');
-  }
+    return originalEnd.call(res, chunk, encoding, callback);
+  };
+
+  // Pasar la solicitud al proxy
+  proxy.web(req, res, {
+    target: targetUrl,
+  });
 });
 
 // Capturar errores en el proxy
@@ -76,7 +85,7 @@ proxy.on('error', async (err, req, res) => {
   console.error('Error en el proxy:', err);
 
   // Registrar el error en la base de datos
-  await LogModel.createLog({
+  const logData = {
     url: req.url,
     method: req.method,
     request_status: 500,
@@ -86,7 +95,9 @@ proxy.on('error', async (err, req, res) => {
     },
     response_status: null,
     response: null,
-  });
+  };
+
+  await LogModel.createLog(logData);
 
   res.writeHead(500, { 'Content-Type': 'text/plain' });
   res.end('Error interno del proxy');
