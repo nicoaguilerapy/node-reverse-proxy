@@ -74,7 +74,7 @@ const server = http.createServer((req, res) => {
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ message: `Logging is now ${isLoggingActive ? 'active' : 'inactive'}` }));
+      res.end(JSON.stringify({ message: `El registro de log pasa a estado: ${isLoggingActive ? 'activo' : 'desacivado'}` }));
       return;
     }
 
@@ -144,28 +144,31 @@ const server = http.createServer((req, res) => {
 
 // Capturar errores en el proxy
 proxy.on('error', async (err, req, res) => {
-  console.error('Error en el proxy:', err);
+  console.error('Error en el proxy:', err.message, {
+    code: err.code,
+    errno: err.errno,
+    syscall: err.syscall,
+  });
 
-  // Registrar el error en la base de datos solo si el guardado está activo
-  const logData = {
-    url: req.url,
-    method: req.method,
-    request_status: 500,
-    request: {
-      headers: req.headers,
-      body: req.body || {},
-    },
-    response_status: null,
-    response: null,
-  };
-
+  // Registrar el error en la base de datos si el guardado está activo
   if (isLoggingActive) {
-    await LogModel.createLog(logData);
+    await LogModel.createLog({
+      url: req.url,
+      method: req.method,
+      request_status: 500,
+      request: {
+        headers: req.headers,
+        body: req.body || {},
+      },
+      response_status: null,
+      response: { error: err.message },
+    });
   }
 
-  res.writeHead(500, { 'Content-Type': 'text/plain' });
-  res.end('Error interno del proxy');
+  res.writeHead(500, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ message: 'Error en el proxy'}));
 });
+;
 
 // Iniciar el servidor
 server.listen(PORT, () => {
