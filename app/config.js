@@ -10,4 +10,5 @@ module.exports = {
   pool, // Exportamos el pool correctamente
   PROXY_TARGET: process.env.TARGET,
   PORT: process.env.PORT,
+  AUTHORIZATION_TOKEN:  process.env.TOKEN,
 };

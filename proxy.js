@@ -1,13 +1,17 @@
 require('dotenv').config();
 const http = require('http');
 const httpProxy = require('http-proxy');
+const url = require('url');
 const LogModel = require('./log/LogModel'); // Ruta al modelo
-const { PROXY_TARGET, PORT } = require('./app/config');
+const { PROXY_TARGET, PORT, AUTHORIZATION_TOKEN } = require('./app/config');
 
 const proxy = httpProxy.createProxyServer({
   secure: true,
   changeOrigin: true,
 });
+
+// Variable global para habilitar o deshabilitar el guardado de registros
+let isLoggingActive = true;
 
 // Función para ajustar dinámicamente la URL
 function mapProxyUrl(req) {
@@ -26,13 +30,42 @@ function mapProxyUrl(req) {
 // Función para limpiar caracteres no válidos de la cadena
 function sanitizeString(inputString) {
   if (!inputString) return '';
-  // Elimina cualquier caracter no imprimible o nulo (caracteres inválidos)
-  return inputString.replace(/[\u0000-\u001F\u007F-\u009F]/g, '').replace(/�/g, '') // Elimina el caracter '�'
-  .replace(/\",/g, '"'); 
+  return inputString
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Elimina caracteres no imprimibles
+    .replace(/�/g, '') // Elimina el carácter de reemplazo '�'
+    .replace(/\",/g, '"'); // Corrige cadenas mal formateadas
 }
 
 // Manejador principal del servidor HTTP
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
+  // Endpoint `/run` para activar/desactivar guardado de registros
+  if (req.url.startsWith('/run')) {
+    const parsedUrl = url.parse(req.url, true);
+    const query = parsedUrl.query;
+    const authHeader = req.headers['authorization'];
+    const headerEsperado = `Bearer ${AUTHORIZATION_TOKEN}`;
+    console.log({headerEsperado});
+    console.log({authHeader});
+
+    // Validar token
+    if (authHeader !== `Bearer ${AUTHORIZATION_TOKEN}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    // Cambiar estado de guardado basado en el parámetro `active`
+    if (query.active === 't') {
+      isLoggingActive = true;
+    } else if (query.active === 'f') {
+      isLoggingActive = false;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ message: `Logging is now ${isLoggingActive ? 'active' : 'inactive'}` }));
+    return;
+  }
+
   const targetUrl = mapProxyUrl(req);
 
   // Variables para capturar el cuerpo de la respuesta
@@ -51,7 +84,7 @@ const server = http.createServer((req, res) => {
       responseBody += sanitizeString(chunk.toString());
     }
 
-    // Log después de completar la respuesta
+    // Log después de completar la respuesta (siempre funciona pero solo guarda si `isLoggingActive` es true)
     const logData = {
       url: req.url,
       method: req.method,
@@ -67,9 +100,11 @@ const server = http.createServer((req, res) => {
       },
     };
 
-    LogModel.createLog(logData).catch(err => {
-      console.error('Error al guardar el log:', err);
-    });
+    if (isLoggingActive) {
+      LogModel.createLog(logData).catch((err) => {
+        console.error('Error al guardar el log:', err);
+      });
+    }
 
     return originalEnd.call(res, chunk, encoding, callback);
   };
@@ -84,7 +119,7 @@ const server = http.createServer((req, res) => {
 proxy.on('error', async (err, req, res) => {
   console.error('Error en el proxy:', err);
 
-  // Registrar el error en la base de datos
+  // Registrar el error en la base de datos solo si el guardado está activo
   const logData = {
     url: req.url,
     method: req.method,
@@ -97,7 +132,9 @@ proxy.on('error', async (err, req, res) => {
     response: null,
   };
 
-  await LogModel.createLog(logData);
+  if (isLoggingActive) {
+    await LogModel.createLog(logData);
+  }
 
   res.writeHead(500, { 'Content-Type': 'text/plain' });
   res.end('Error interno del proxy');
