@@ -3,8 +3,7 @@ const http = require('http');
 const httpProxy = require('http-proxy');
 const url = require('url');
 const zlib = require('zlib');
-const bodyParser = require('body-parser'); // Analizador de request body
-const LogModel = require('./log/LogModel'); // Ruta al modelo
+const LogModel = require('./log/LogModel');
 const { PROXY_TARGET, PORT, AUTHORIZATION_TOKEN } = require('./app/config');
 
 const proxy = httpProxy.createProxyServer({
@@ -12,10 +11,8 @@ const proxy = httpProxy.createProxyServer({
   changeOrigin: true,
 });
 
-// Variable global para habilitar o deshabilitar el guardado de registros
 let isLoggingActive = true;
 
-// Función para ajustar dinámicamente la URL
 function mapProxyUrl(req) {
   const apiPrefix = '/api/';
   if (req.url.startsWith(apiPrefix)) {
@@ -29,18 +26,15 @@ function mapProxyUrl(req) {
   return PROXY_TARGET;
 }
 
-// Función para limpiar caracteres no válidos de la cadena
 function sanitizeString(inputString) {
   if (!inputString) return '';
   return inputString
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Elimina caracteres no imprimibles
-    .replace(/�/g, '') // Elimina el carácter de reemplazo '�'
-    .replace(/",/g, '"'); // Corrige cadenas mal formateadas
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    .replace(/�/g, '')
+    .replace(/",/g, '"');
 }
 
-// Crear servidor HTTP
 const server = http.createServer((req, res) => {
-  // Middleware para capturar el cuerpo de la solicitud
   let requestBody = '';
   req.on('data', (chunk) => {
     requestBody += chunk.toString();
@@ -48,25 +42,22 @@ const server = http.createServer((req, res) => {
 
   req.on('end', () => {
     try {
-      req.body = JSON.parse(requestBody || '{}'); // Parsear el cuerpo como JSON
+      req.body = JSON.parse(requestBody || '{}');
     } catch (err) {
-      req.body = requestBody; // Si no es JSON, almacenar como texto plano
+      req.body = requestBody;
     }
 
-    // Endpoint `/run` para activar/desactivar guardado de registros
     if (req.url.startsWith('/run')) {
       const parsedUrl = url.parse(req.url, true);
       const query = parsedUrl.query;
       const authHeader = req.headers['authorization'];
 
-      // Validar token
       if (authHeader !== `Bearer ${AUTHORIZATION_TOKEN}`) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
       }
 
-      // Cambiar estado de guardado basado en el parámetro `active`
       if (query.active === 't') {
         isLoggingActive = true;
       } else if (query.active === 'f') {
@@ -80,44 +71,45 @@ const server = http.createServer((req, res) => {
 
     const targetUrl = mapProxyUrl(req);
 
-    // Variables para capturar el cuerpo de la respuesta
     let responseChunks = [];
     const originalWrite = res.write;
     const originalEnd = res.end;
 
-    // Interceptar datos de la respuesta
     res.write = function (chunk, encoding, callback) {
-      responseChunks.push(chunk); // Acumula los datos
+      if (typeof chunk === 'string') {
+        chunk = Buffer.from(chunk, encoding || 'utf-8');
+      }
+      responseChunks.push(chunk);
       return originalWrite.call(res, chunk, encoding, callback);
     };
 
     res.end = function (chunk, encoding, callback) {
       if (chunk) {
-        responseChunks.push(chunk); // Agrega el último chunk si existe
+        if (typeof chunk === 'string') {
+          chunk = Buffer.from(chunk, encoding || 'utf-8');
+        }
+        responseChunks.push(chunk);
       }
 
-      // Procesar y descomprimir respuesta
       const buffer = Buffer.concat(responseChunks);
       if (res.getHeader('content-encoding') === 'gzip') {
         zlib.gunzip(buffer, (err, decoded) => {
-          responseBody = err ? '' : sanitizeString(decoded.toString());
-          saveLog(req, res, responseBody); // Guardar log después de procesar
+          const responseBody = err ? '' : sanitizeString(decoded.toString());
+          saveLog(req, res, responseBody);
         });
       } else {
-        responseBody = sanitizeString(buffer.toString());
-        saveLog(req, res, responseBody); // Guardar log directamente
+        const responseBody = sanitizeString(buffer.toString());
+        saveLog(req, res, responseBody);
       }
 
       return originalEnd.call(res, chunk, encoding, callback);
     };
 
-    // Pasar la solicitud al proxy
     proxy.web(req, res, { target: targetUrl });
   });
 });
 
 function saveLog(req, res, responseBody) {
-  // Guardar el log solo si está activo
   if (isLoggingActive) {
     const logData = {
       url: req.url,
@@ -140,11 +132,9 @@ function saveLog(req, res, responseBody) {
   }
 }
 
-// Capturar errores en el proxy
 proxy.on('error', async (err, req, res) => {
   console.error('Error en el proxy:', err);
 
-  // Registrar el error en la base de datos solo si el guardado está activo
   const logData = {
     url: req.url,
     method: req.method,
@@ -165,7 +155,6 @@ proxy.on('error', async (err, req, res) => {
   res.end('Error interno del proxy');
 });
 
-// Iniciar el servidor
 server.listen(PORT, () => {
   console.log(`Proxy ejecutándose en puerto: ${PORT}`);
 });
